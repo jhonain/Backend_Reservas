@@ -1,5 +1,6 @@
 package com.vasquez.reservas_backend.disponibilidad.service.Impl;
 
+import com.vasquez.reservas_backend.config.CacheConfig;
 import com.vasquez.reservas_backend.disponibilidad.dto.ActualizarDisponibilidadRequest;
 import com.vasquez.reservas_backend.disponibilidad.dto.CrearDisponibilidadRequest;
 import com.vasquez.reservas_backend.disponibilidad.dto.DisponibilidadResponse;
@@ -10,11 +11,15 @@ import com.vasquez.reservas_backend.servicio.entity.Servicio;
 import com.vasquez.reservas_backend.servicio.repository.ServicioRepository;
 import com.vasquez.reservas_backend.shared.exception.BusinessException;
 import com.vasquez.reservas_backend.shared.exception.ResourceNotFoundException;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.DayOfWeek;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 @Transactional
@@ -31,12 +36,20 @@ public class DisponibilidadServiceImpl implements DisponibilidadService {
         this.servicioRepository = servicioRepository;
     }
 
+
     @Override
+    @Caching(evict = {
+            @CacheEvict(
+                    cacheNames = CacheConfig.DISPONIBILIDADES_POR_SERVICIO,
+                    allEntries = true
+            ),
+            @CacheEvict(
+                    cacheNames = CacheConfig.DISPONIBILIDADES_POR_SERVICIO_Y_DIA,
+                    allEntries = true
+            )
+    })
     public DisponibilidadResponse crear(CrearDisponibilidadRequest request) {
-        Servicio servicio = servicioRepository.findById(request.servicioId())
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Servicio no encontrado con id " + request.servicioId()
-                ));
+        Servicio servicio = obtenerServicioOFallar(request.servicioId());
 
         validarSinSuperposicion(
                 request.servicioId(),
@@ -59,6 +72,16 @@ public class DisponibilidadServiceImpl implements DisponibilidadService {
     }
 
     @Override
+    @Caching(evict = {
+            @CacheEvict(
+                    cacheNames = CacheConfig.DISPONIBILIDADES_POR_SERVICIO,
+                    allEntries = true
+            ),
+            @CacheEvict(
+                    cacheNames = CacheConfig.DISPONIBILIDADES_POR_SERVICIO_Y_DIA,
+                    allEntries = true
+            )
+    })
     public DisponibilidadResponse actualizar(
             Long id,
             ActualizarDisponibilidadRequest request
@@ -84,27 +107,49 @@ public class DisponibilidadServiceImpl implements DisponibilidadService {
 
     @Override
     @Transactional(readOnly = true)
+    @Cacheable(
+            cacheNames = CacheConfig.DISPONIBILIDADES_POR_SERVICIO,
+            key = "#servicioId"
+    )
     public List<DisponibilidadResponse> listarPorServicio(Long servicioId) {
-        return disponibilidadRepository.findByServicioIdAndActivoTrue(servicioId)
+        obtenerServicioOFallar(servicioId);
+
+        return disponibilidadRepository
+                .findByServicioIdAndActivoTrue(servicioId)
                 .stream()
                 .map(DisponibilidadResponse::desde)
-                .toList();
+                .collect(Collectors.toList());
     }
 
     @Override
     @Transactional(readOnly = true)
+    @Cacheable(
+            cacheNames = CacheConfig.DISPONIBILIDADES_POR_SERVICIO_Y_DIA,
+            key = "#servicioId + '-' + #diaSemana.name()"
+    )
     public List<DisponibilidadResponse> listarPorServicioYDia(
             Long servicioId,
             DayOfWeek diaSemana
     ) {
+        obtenerServicioOFallar(servicioId);
         return disponibilidadRepository
                 .findByServicioIdAndDiaSemanaAndActivoTrue(servicioId, diaSemana)
                 .stream()
                 .map(DisponibilidadResponse::desde)
-                .toList();
+                .collect(Collectors.toList());
     }
 
     @Override
+    @Caching(evict = {
+            @CacheEvict(
+                    cacheNames = CacheConfig.DISPONIBILIDADES_POR_SERVICIO,
+                    allEntries = true
+            ),
+            @CacheEvict(
+                    cacheNames = CacheConfig.DISPONIBILIDADES_POR_SERVICIO_Y_DIA,
+                    allEntries = true
+            )
+    })
     public void desactivar(Long id) {
         Disponibilidad disponibilidad = obtenerOFallar(id);
         disponibilidad.desactivar();
@@ -135,6 +180,13 @@ public class DisponibilidadServiceImpl implements DisponibilidadService {
         return disponibilidadRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Disponibilidad no encontrada con id " + id
+                ));
+    }
+
+    private Servicio obtenerServicioOFallar(Long servicioId) {
+        return servicioRepository.findById(servicioId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Servicio no encontrado con id " + servicioId
                 ));
     }
 }

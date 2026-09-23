@@ -32,6 +32,10 @@ public class Disponibilidad extends Auditable {
     @Column(nullable = false)
     private boolean activo;
 
+    @Version
+    @Column(nullable = false)
+    private Long version = 0L;
+
     protected Disponibilidad() {
     }
 
@@ -110,5 +114,9 @@ public class Disponibilidad extends Auditable {
 
     public boolean isActivo() {
         return activo;
+    }
+
+    public Long getVersion() {
+        return version;
     }
 }

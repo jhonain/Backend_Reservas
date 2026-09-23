@@ -11,6 +11,8 @@ import com.vasquez.reservas_backend.usuario.entity.Usuario;
 import com.vasquez.reservas_backend.usuario.repository.UsuarioRepository;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -26,6 +28,7 @@ import java.util.Base64;
 @Transactional
 public class AuthServiceImpl implements AuthService {
 
+    private static final Logger logger = LoggerFactory.getLogger(AuthServiceImpl.class);
     private static final String COOKIE_REFRESH_TOKEN = "refreshToken";
 
     private final UsuarioRepository usuarioRepository;
@@ -50,14 +53,21 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public LoginResponse login(LoginRequest request, HttpServletResponse response) {
+        logger.info("Intento de login: correo={}", request.correo());
+
         Usuario usuario = usuarioRepository.findByCorreoIgnoreCase(request.correo())
-                .orElseThrow(() -> new BusinessException("Credenciales inválidas"));
+                .orElseThrow(() -> {
+                    logger.warn("Login fallido, correo no registrado: {}", request.correo());
+                    return new BusinessException("Credenciales inválidas");
+                });
 
         if (!usuario.isActivo()) {
+            logger.warn("Login fallido, cuenta inactiva: correo={}", request.correo());
             throw new BusinessException("Credenciales inválidas");
         }
 
         if (!passwordEncoder.matches(request.password(), usuario.getPassword())) {
+            logger.warn("Login fallido, password incorrecto: correo={}", request.correo());
             throw new BusinessException("Credenciales inválidas");
         }
 
@@ -82,23 +92,29 @@ public class AuthServiceImpl implements AuthService {
 
         agregarCookieRefreshToken(response, refreshTokenPlano, refreshExpirationDays);
 
+        logger.info("Login exitoso: correo={}, usuarioId={}", usuario.getCorreo(), usuario.getId());
+
         return LoginResponse.de(accessToken, jwtService.getAccessExpirationSeconds());
     }
 
     @Override
     public LoginResponse refrescar(String refreshTokenPlano, HttpServletResponse response) {
         if (refreshTokenPlano == null || refreshTokenPlano.isBlank()) {
+            logger.warn("Intento de refresh sin token");
             throw new BusinessException("Sesión inválida, inicia sesión nuevamente");
         }
 
         String hash = hashSha256(refreshTokenPlano);
 
         RefreshToken tokenGuardado = refreshTokenRepository.findByTokenHash(hash)
-                .orElseThrow(() -> new BusinessException(
-                        "Sesión inválida, inicia sesión nuevamente"
-                ));
+                .orElseThrow(() -> {
+                    logger.warn("Intento de refresh con token no reconocido");
+                    return new BusinessException("Sesión inválida, inicia sesión nuevamente");
+                });
 
         if (!tokenGuardado.esValido()) {
+            logger.warn("Intento de refresh con token expirado/revocado: usuarioId={}",
+                    tokenGuardado.getUsuario().getId());
             throw new BusinessException("Sesión expirada, inicia sesión nuevamente");
         }
 
@@ -115,6 +131,8 @@ public class AuthServiceImpl implements AuthService {
 
         agregarCookieRefreshToken(response, nuevoRefreshTokenPlano, refreshExpirationDays);
 
+        logger.info("Refresh exitoso: usuarioId={}", usuario.getId());
+
         String nuevoAccessToken = jwtService.generarAccessToken(
                 usuario.getId(),
                 usuario.getCorreo(),
@@ -129,7 +147,10 @@ public class AuthServiceImpl implements AuthService {
         if (refreshTokenPlano != null && !refreshTokenPlano.isBlank()) {
             String hash = hashSha256(refreshTokenPlano);
             refreshTokenRepository.findByTokenHash(hash)
-                    .ifPresent(RefreshToken::revocar);
+                    .ifPresent(token -> {
+                        logger.info("Logout: usuarioId={}", token.getUsuario().getId());
+                        token.revocar();
+                    });
         }
 
         eliminarCookieRefreshToken(response);

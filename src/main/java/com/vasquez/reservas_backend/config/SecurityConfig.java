@@ -2,6 +2,8 @@ package com.vasquez.reservas_backend.config;
 
 import com.vasquez.reservas_backend.auth.security.JwtAuthenticationFilter;
 import com.vasquez.reservas_backend.shared.exception.ApiErrorResponse;
+import com.vasquez.reservas_backend.config.CorsConfig;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
@@ -17,6 +19,8 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 import java.io.IOException;
 import java.time.Instant;
 import java.util.Map;
+
+import org.springframework.web.cors.CorsConfigurationSource;
 import tools.jackson.databind.ObjectMapper;
 
 
@@ -27,12 +31,30 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final ObjectMapper objectMapper;
+    private final CorsConfigurationSource corsConfigurationSource;
+
     public SecurityConfig(
             JwtAuthenticationFilter jwtAuthenticationFilter,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            CorsConfigurationSource corsConfigurationSource
     ) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.objectMapper = objectMapper;
+        this.corsConfigurationSource = corsConfigurationSource;
+    }
+
+    // JwtAuthenticationFilter es un @Component (Filter), por lo que Spring Boot
+    // lo auto-registraría como filtro de servlet global ("/*") ADEMÁS de
+    // agregarlo aquí vía addFilterBefore(). Se deshabilita ese auto-registro
+    // para que exista una única ejecución, dentro de la cadena de Security.
+    @Bean
+    public FilterRegistrationBean<JwtAuthenticationFilter> jwtFilterRegistration(
+            JwtAuthenticationFilter filter
+    ) {
+        FilterRegistrationBean<JwtAuthenticationFilter> registration =
+                new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
     }
 
     @Bean
@@ -50,7 +72,8 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http)
             throws Exception {
 
-        return http
+        http
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
@@ -59,8 +82,12 @@ public class SecurityConfig {
                         .requestMatchers(
                                 "/api/auth/**",
                                 "/api/usuarios/registro",
-                                "/actuator/health"
+                                "/swagger-ui/**",
+                                "/swagger-ui.html",
+                                "/v3/api-docs/**",
+                                "/ws/**"
                         ).permitAll()
+                        .requestMatchers("/actuator/health").permitAll()
                         .anyRequest().authenticated()
                 )
                 .exceptionHandling(exceptions -> exceptions
@@ -84,8 +111,8 @@ public class SecurityConfig {
                 .addFilterBefore(
                         jwtAuthenticationFilter,
                         UsernamePasswordAuthenticationFilter.class
-                )
-                .build();
+                );
+           return http.build();
     }
     private void escribirError(
             jakarta.servlet.http.HttpServletResponse response,

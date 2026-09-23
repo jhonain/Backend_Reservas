@@ -20,6 +20,10 @@ public class Servicio extends Auditable {
     @Column(name = "duracion_minutos", nullable = false)
     private Integer duracionMinutos;
 
+    @Version
+    @Column(nullable = false)
+    private Long version = 0L;
+
     @Column(nullable = false)
     private boolean activo;
 
@@ -73,5 +77,9 @@ public class Servicio extends Auditable {
 
     public boolean isActivo() {
         return activo;
+    }
+
+    public Long getVersion() {
+        return version;
     }
 }

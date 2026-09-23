@@ -2,6 +2,7 @@ package com.vasquez.reservas_backend.reserva.service.Impl;
 
 import com.vasquez.reservas_backend.disponibilidad.entity.Disponibilidad;
 import com.vasquez.reservas_backend.disponibilidad.repository.DisponibilidadRepository;
+import com.vasquez.reservas_backend.reserva.Event.ReservaCambiadaEvent;
 import com.vasquez.reservas_backend.reserva.dto.ActualizarEstadoReservaRequest;
 import com.vasquez.reservas_backend.reserva.dto.CrearReservaRequest;
 import com.vasquez.reservas_backend.reserva.dto.ReservaResponse;
@@ -15,10 +16,13 @@ import com.vasquez.reservas_backend.shared.exception.BusinessException;
 import com.vasquez.reservas_backend.shared.exception.ResourceNotFoundException;
 import com.vasquez.reservas_backend.usuario.entity.Usuario;
 import com.vasquez.reservas_backend.usuario.repository.UsuarioRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.DayOfWeek;
 import java.time.LocalTime;
@@ -29,21 +33,26 @@ import java.util.Set;
 @Transactional
 public class ReservaServiceImpl implements ReservaService {
 
+    private static final Logger logger = LoggerFactory.getLogger(ReservaServiceImpl.class);
+
     private final ReservaRepository reservaRepository;
     private final UsuarioRepository usuarioRepository;
     private final ServicioRepository servicioRepository;
     private final DisponibilidadRepository disponibilidadRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     public ReservaServiceImpl(
             ReservaRepository reservaRepository,
             UsuarioRepository usuarioRepository,
             ServicioRepository servicioRepository,
-            DisponibilidadRepository disponibilidadRepository
+            DisponibilidadRepository disponibilidadRepository,
+            ApplicationEventPublisher eventPublisher
     ) {
         this.reservaRepository = reservaRepository;
         this.usuarioRepository = usuarioRepository;
         this.servicioRepository = servicioRepository;
         this.disponibilidadRepository = disponibilidadRepository;
+        this.eventPublisher = eventPublisher;
     }
 
     @Override
@@ -51,12 +60,16 @@ public class ReservaServiceImpl implements ReservaService {
             CrearReservaRequest request,
             Long usuarioAutenticadoId
     ) {
+        logger.info("Creando reserva: usuarioId={}, servicioId={}, fecha={}",
+                usuarioAutenticadoId, request.servicioId(), request.fecha());
+
         Usuario usuario = usuarioRepository.findById(usuarioAutenticadoId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Usuario autenticado no encontrado"
                 ));
 
         if (!usuario.isActivo()) {
+            logger.warn("Reserva rechazada, usuario inactivo: usuarioId={}", usuarioAutenticadoId);
             throw new BusinessException(
                     "Tu cuenta está inactiva y no puede crear reservas"
             );
@@ -68,6 +81,7 @@ public class ReservaServiceImpl implements ReservaService {
                 ));
 
         if (!servicio.isActivo()) {
+            logger.warn("Reserva rechazada, servicio inactivo: servicioId={}", servicio.getId());
             throw new BusinessException(
                     "El servicio seleccionado no está disponible"
             );
@@ -95,6 +109,8 @@ public class ReservaServiceImpl implements ReservaService {
         );
 
         if (existeSolapamiento) {
+            logger.warn("Reserva rechazada, solapamiento: servicioId={}, fecha={}, horaInicio={}",
+                    servicio.getId(), request.fecha(), request.horaInicio());
             throw new BusinessException(
                     "El horario seleccionado ya no está disponible"
             );
@@ -109,6 +125,10 @@ public class ReservaServiceImpl implements ReservaService {
         );
 
         Reserva guardada = reservaRepository.save(reserva);
+
+        publicarCambioReserva(guardada, "RESERVA_CREADA");
+
+        logger.info("Reserva creada: id={}, usuarioId={}", guardada.getId(), usuarioAutenticadoId);
 
         return ReservaResponse.desde(guardada);
     }
@@ -169,7 +189,11 @@ public class ReservaServiceImpl implements ReservaService {
             );
         }
 
-        return ReservaResponse.desde(reserva);
+        Reserva guardada = reservaRepository.save(reserva);
+
+        publicarCambioReserva(guardada, "RESERVA_ESTADO_ACTUALIZADO");
+
+        return ReservaResponse.desde(guardada);
     }
 
     @Override
@@ -187,6 +211,13 @@ public class ReservaServiceImpl implements ReservaService {
         );
 
         reserva.cancelar();
+
+        Reserva guardada = reservaRepository.save(reserva);
+
+        publicarCambioReserva(guardada, "RESERVA_CANCELADA");
+
+        logger.info("Reserva cancelada: id={}, por usuarioId={}, esAdmin={}",
+                reservaId, usuarioAutenticadoId, esAdmin);
     }
 
     private void validarDisponibilidad(
@@ -235,5 +266,23 @@ public class ReservaServiceImpl implements ReservaService {
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Reserva no encontrada con id " + reservaId
                 ));
+    }
+
+    private void publicarCambioReserva(
+            Reserva reserva,
+            String tipo
+    ) {
+        eventPublisher.publishEvent(
+                new ReservaCambiadaEvent(
+                        reserva.getId(),
+                        reserva.getUsuario().getId(),
+                        reserva.getServicio().getId(),
+                        reserva.getFecha(),
+                        reserva.getHoraInicio(),
+                        reserva.getHoraFin(),
+                        tipo,
+                        reserva.getEstado().name()
+                )
+        );
     }
 }

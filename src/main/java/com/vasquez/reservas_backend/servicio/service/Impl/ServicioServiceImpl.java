@@ -1,6 +1,7 @@
-package com.vasquez.reservas_backend.servicio.service.impl;
+package com.vasquez.reservas_backend.servicio.service.Impl;
 
 
+import com.vasquez.reservas_backend.config.CacheConfig;
 import com.vasquez.reservas_backend.servicio.dto.ActualizarServicioRequest;
 import com.vasquez.reservas_backend.servicio.dto.CrearServicioRequest;
 import com.vasquez.reservas_backend.servicio.dto.ServicioResponse;
@@ -14,6 +15,9 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Caching;
 @Service
 @Transactional
 public class ServicioServiceImpl implements ServicioService {
@@ -24,6 +28,10 @@ public class ServicioServiceImpl implements ServicioService {
         this.servicioRepository = servicioRepository;
     }
 
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CacheConfig.SERVICIOS_ACTIVOS, allEntries = true),
+            @CacheEvict(cacheNames = CacheConfig.SERVICIO_POR_ID, allEntries = true)
+    })
     @Override
     public ServicioResponse crear(CrearServicioRequest request) {
         if (servicioRepository.existsByNombreIgnoreCase(request.nombre())) {
@@ -43,6 +51,10 @@ public class ServicioServiceImpl implements ServicioService {
         return ServicioResponse.desde(guardado);
     }
 
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CacheConfig.SERVICIOS_ACTIVOS, allEntries = true),
+            @CacheEvict(cacheNames = CacheConfig.SERVICIO_POR_ID, allEntries = true)
+    })
     @Override
     public ServicioResponse actualizar(
             Long id,
@@ -66,26 +78,45 @@ public class ServicioServiceImpl implements ServicioService {
                 request.duracionMinutos()
         );
 
-        return ServicioResponse.desde(servicio);
+        Servicio guardado = servicioRepository.save(servicio);
+        return ServicioResponse.desde(guardado);
     }
 
     @Override
     @Transactional(readOnly = true)
-    public ServicioResponse buscarPorId(Long id) {
-        return ServicioResponse.desde(obtenerOFallar(id));
-    }
-
-    @Override
-    @Transactional(readOnly = true)
+    @Cacheable(
+            cacheNames = CacheConfig.SERVICIOS_ACTIVOS,
+            key = "#pageable.pageNumber + '-' + #pageable.pageSize + '-' + #pageable.sort"
+    )
     public Page<ServicioResponse> listarActivos(Pageable pageable) {
         return servicioRepository.findByActivoTrue(pageable)
                 .map(ServicioResponse::desde);
     }
 
     @Override
+    @Caching(evict = {
+            @CacheEvict(
+                    cacheNames = CacheConfig.SERVICIOS_ACTIVOS,
+                    allEntries = true
+            ),
+            @CacheEvict(
+                    cacheNames = CacheConfig.SERVICIO_POR_ID,
+                    allEntries = true
+            )
+    })
     public void desactivar(Long id) {
         Servicio servicio = obtenerOFallar(id);
         servicio.desactivar();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    @Cacheable(
+            cacheNames = CacheConfig.SERVICIO_POR_ID,
+            key = "#id"
+    )
+    public ServicioResponse buscarPorId(Long id) {
+        return ServicioResponse.desde(obtenerOFallar(id));
     }
 
     private Servicio obtenerOFallar(Long id) {
